@@ -7,10 +7,11 @@
 # v 1.0 Initial Release
 # v 1.1 Added Stored Credentials, New Code Template
 # v 1.2 New Code Template
+# v 1.3 Powershell 7 ready, v1.4 Template
 #
 # Init Release: 03.02.2020
-# Last Update: 29.12.2020
-# Code Template V 1.3
+# Last Update: 08.09.2021
+# Code Template V 1.4
 #
 # URL: https://au2mator.com/scom-self-service-with-au2mator-start-maintenance-mode/?utm_source=github&utm_medium=social&utm_campaign=SCOM_StartMM&utm_content=PS1
 # Github: https://github.com/au2mator/SCOM-Start-Maintenance-Mode
@@ -31,7 +32,7 @@ param (
     [parameter(Mandatory = $true)] 
     [String]$c_Reason, 
 
-    [parameter(Mandatory = $true)] 
+    [parameter(Mandatory = $false)] 
     [String]$c_Comment, 
 
     [parameter(Mandatory = $true)] 
@@ -49,29 +50,35 @@ param (
 #endregion  InputParamaters
 
 
-
 #region Variables
-##Script Handling
 Set-ExecutionPolicy -ExecutionPolicy Bypass
 $DoImportPSSession = $false
 
 
 
 ## Environment
-[string]$DCServer = 'svdc01'
-[string]$LogPath = "C:\_SCOworkingDir\TFS\PS-Services\au2mator - PS Template"
-[string]$LogfileName = "au2mator - PS Template"
+[string]$OpsmgrServer = 'Demo01'
+[string]$LogPath = "C:\_SCOworkingDir\TFS\PS-Services\SCOM - Start Maintenance Mode"
+[string]$LogfileName = "Start-Maintenance Mode"
 
 [string]$CredentialStorePath = "C:\_SCOworkingDir\TFS\PS-Services\CredentialStore" #see for details: https://au2mator.com/documentation/powershell-credentials/?utm_source=github&utm_medium=social&utm_campaign=SCOM_StartMM&utm_content=PS1
 
-
-$Modules = @("ActiveDirectory","OperationsManager") #$Modules = @("ActiveDirectory", "SharePointPnPPowerShellOnline")
-
+$Modules = @("ActiveDirectory") #$Modules = @("ActiveDirectory", "SharePointPnPPowerShellOnline")
 
 ## au2mator Settings
 [string]$PortalURL = "http://demo01.au2mator.local"
 [string]$au2matorDBServer = "demo01"
-[string]$au2matorDBName = "au2matorNew"
+[string]$au2matorDBName = "au2mator40Demo2"
+
+#Control Teams
+$SendTeamsCardToInitiatedByUser = $true #Send a Card in Teams after Service is completed
+$SendTeamsCardToTargetUser = $false #Send Card in Teams to Target User after Service is completed
+$ToChannel = $true #Send the Message Card to a Channel
+$ToUser = $false #Send the Message Card to the User via Chat
+
+#Teams Settings
+$TeamName = "au2mator - ORG"
+$ChannelName = "General"
 
 ## Control Mail
 $SendMailToInitiatedByUser = $true #Send a Mail after Service is completed
@@ -82,7 +89,7 @@ $SMTPServer = "smtp.office365.com"
 $SMPTAuthentication = $true #When True, User and Password needed
 $EnableSSLforSMTP = $true
 $SMTPSender = "SelfService@au2mator.com"
-$SMTPPort="587"
+$SMTPPort = "587"
 
 # Stored Credentials
 # See: https://au2mator.com/documentation/powershell-credentials/?utm_source=github&utm_medium=social&utm_campaign=SCOM_StartMM&utm_content=PS1
@@ -100,28 +107,24 @@ if ($SMTPCredential_method -eq "Manual") {
     $SMTPcredential = New-Object System.Management.Automation.PSCredential ($SMTPUser, $f_secpasswd)
 }
 
+
+#TeamsCredentials to send Teams Card #https://au2mator.com/documentation/powershell-credentials/?utm_source=github&utm_medium=social&utm_campaign=PS_Template&utm_content=PS1
+$GraphAPICred_File = "TeamsCreds.xml"
+$GraphAPICred = Import-CliXml -Path (Get-ChildItem -Path $CredentialStorePath -Filter $GraphAPICred_File).FullName
+$TEAMS_clientId = $GraphAPICred.clientId
+$TEAMS_clientSecret = $GraphAPICred.clientSecret
+$TEAMS_tenantName = $GraphAPICred.tenantName
+$TEAMS_User = $GraphAPICred.User
+$TEAMS_PW = $GraphAPICred.PW
+
 #endregion Variables
 
 
 #region CustomVaribles
-<#$PSOnlineCredential_method = "Stored" #Stored, Manual
-$PSOnlineCredential_File = "PSOnlineCreds.xml"
-$PSOnlineUser = ""
-$PSOnlinePassword = ""
 
-if ($PSOnlineCredential_method -eq "Stored") {
-    $PSOnlineCredential = Import-CliXml -Path (Get-ChildItem -Path $CredentialStorePath -Filter $PSOnlineCredential_file).FullName
-}
-
-if ($PSOnlineCredential_method -eq "Manual") {
-    $f_secpasswd = ConvertTo-SecureString $PSOnlinePassword -AsPlainText -Force
-    $PSOnlineCredential = New-Object System.Management.Automation.PSCredential ($PSOnlineUser, $f_secpasswd)
-}
-
-$TempBackupStorage = "C:\_SCOworkingDir\TFS\PS-Services\M365 - Backup MS Teams Chat History" #Path to store Export File
-#>
 
 #endregion CustomVaribles
+
 
 #region Functions
 function Write-au2matorLog {
@@ -228,7 +231,7 @@ function Get-UserInput ($RequestID) {
     FROM            dbo.Requests AS R INNER JOIN
                              dbo.RunbookParameterMappings AS RPM ON R.ServiceId = RPM.ServiceId INNER JOIN
                              dbo.RequestParameters AS RP ON RPM.ParameterName = RP.[Key] AND R.ID = RP.RequestId
-    where RP.RequestId = '$RequestID' order by [Order]"
+    where RP.RequestId = '$RequestID' and rpm.IsDeleted = '0' order by [Order]"
 
     $html = "<table><tr><td><b>Question</b></td><td><b>Answer</b></td></tr>"
     $html = "<table>"
@@ -453,6 +456,122 @@ Function Send-ServiceMail ($HTMLBody, $ServiceName, $Recipient, $RequestID, $Req
     }
 
 }
+
+Function Send-TeamsCard ($ServiceName, $Recipient, $RequestID, $RequestStatus, $au2matorReturn) {
+    Write-au2matorLog -Type INFO -Text "Function Send Teams Card"
+
+    switch ($RequestStatus) {
+        "COMPLETED" { $statusColor = "Good" }
+        "IN PROGRESS" { $statusColor = "Accent" }
+        "ERROR" { $statusColor = "Attention" }
+        "FAILED" { $statusColor = "Attention" }
+        "WARNING" { $statusColor = "Warning" }
+        Default { $statusColor = "Good" }
+    }
+    Write-au2matorLog -Type INFO -Text "Calculated the Statuscolor: $statusColor related to our Status: $RequestStatus"
+    $URL = $PortalURL + "/Requests/SingleStatus?id=$RequestID"
+
+
+    #Connect to GRAPH API
+    $tokenBody = @{  
+        Grant_Type = "password"  
+        Scope      = "user.read%20openid%20profile%20offline_access"  
+        Client_Id  = $TEAMS_clientId  
+        username   = $TEAMS_User
+        password   = $TEAMS_pw
+        resource   = "https://graph.microsoft.com"
+    }   
+
+    $tokenResponse = Invoke-RestMethod "https://login.microsoftonline.com/common/oauth2/token" -Method Post -ContentType "application/x-www-form-urlencoded" -Body $tokenBody -ErrorAction STOP
+    $headers = @{
+        "Authorization" = "Bearer $($tokenResponse.access_token)"
+        "Content-type"  = "application/json"
+    }
+
+    $GUID = (New-Guid).guid
+
+
+    $GetRecipientUserURL = "https://graph.microsoft.com/v1.0/users/$Recipient"
+    $RecipientUserID = (Invoke-RestMethod -Uri $GetRecipientUserURL -Method GET -Headers $headers).id
+    $RecipientUserDisplayName = (Invoke-RestMethod -Uri $GetRecipientUserURL -Method GET -Headers $headers).displayname
+    
+
+    if ($ToChannel) {
+        Write-au2matorLog -Type INFO -Text "Send Card to Channel"
+        #Get ID for the Team
+        $URLgetteamid = "https://graph.microsoft.com/v1.0/groups?$select=id,resourceProvisioningOptions,displayName"
+        $TeamID = ((Invoke-RestMethod -Method GET -Uri $URLgetteamid  -Headers $headers).value | Where-Object -property displayName -value $TeamName -eq).id
+
+
+        #Get ID for the Channel
+        $URLgetchannelid = "https://graph.microsoft.com/v1.0/teams/$TeamID/channels"
+        $ChannelID = ((Invoke-RestMethod -Method GET -Uri $URLgetchannelid  -Headers $headers).value | Where-Object -property displayName -value $ChannelName -eq).id
+
+        #Send Message in channel
+
+        $URLchatmessage = "https://graph.microsoft.com/v1.0/teams/$TeamID/channels/$ChannelID/messages"
+
+    }
+
+    if ($ToUser) {
+        Write-au2matorLog -Type INFO -Text "Send Card to User"
+        $GetBotUserURL = "https://graph.microsoft.com/v1.0/users/$TEAMS_User"
+
+        $BotUserID = (Invoke-RestMethod -Uri $GetBotUserURL -Method GET  -Headers $headers).id
+ 
+    
+        $ChatBody = @"
+    {
+        "chatType": "oneOnOne",
+        "members": [
+          {
+            "@odata.type": "#microsoft.graph.aadUserConversationMember",
+            "roles": ["owner"],
+            "user@odata.bind": "https://graph.microsoft.com/v1.0/users('$BotUserID')"
+          },
+          {
+            "@odata.type": "#microsoft.graph.aadUserConversationMember",
+            "roles": ["owner"],
+            "user@odata.bind": "https://graph.microsoft.com/v1.0/users('$RecipientUserID')"
+          }
+        ]
+      }
+"@
+        $URLchat = "https://graph.microsoft.com/v1.0/Chats"
+    
+        $ChatID = (Invoke-RestMethod -Uri $URLchat -Method POST -Body $ChatBody -Headers $headers).id
+    
+    
+        $URLchatmessage = "https://graph.microsoft.com/v1.0/Chats/$ChatID/messages"
+
+    }
+
+   
+
+    $BodyJsonTeam = @"
+    {
+        "subject": null,
+        "body": {
+            "contentType": "html",
+            "content": "<attachment id=\"$GUID\"></attachment>"
+        },
+        
+        "attachments": [
+        {
+          "id": "$GUID",
+          "contentType": "application/vnd.microsoft.card.adaptive",
+          "content": "{\n        \"type\": \"AdaptiveCard\",\n        \"$schema\": \"http://adaptivecards.io/schemas/adaptive-card.json\",\n        \"version\": \"1.2\",\n    \"speak\": \"<s>au2mator Request ID $RequestID is $RequestStatus</s><s>$au2matorReturn</s>\",\n    \"body\": [\n        {\n            \"type\": \"TextBlock\",\n            \"text\": \"Hi <at>$RecipientUserDisplayName</at>, \\nhere is the Result of your au2mator Service\",\n            \"wrap\": true,\n            \"w      eight\": \"Bolder\",\n            \"fontType\": \"Default\"\n        },{\n            \"type\": \"ColumnSet\",\n            \"columns\": [\n                {\n                    \"type\": \"Column\",\n                    \"width\": \"auto\",\n                    \"items\": [\n                        {\n                            \"type\": \"Image\",\n      \"url\": \"https://au2mator.com/wp-content/uploads/2018/02/HPLogoau2mator-1.png\",\n                            \"altText\": \"au2mator Logo\"\n                        }\n                    ]\n},\n                {\n                    \"type\": \"Column\",\n                    \"width\": \"stretch\",\n                    \"items\": [\n                        {\n                            \"type\": \"TextBlock\",\n                            \"text\": \"Status\",\n                            \"horizontalAlignment\": \"Right\",\n                            \"isSubtle\": true,\n                            \"wrap\": true\n                        },\n                        {\n                            \"type\": \"TextBlock\",\n                            \"text\": \"$RequestStatus\",\n                            \"horizontalAlignment\": \"Right\",\n                            \"spacing\": \"None\",\n                            \"size\": \"Large\",\n                            \"wrap\": true,\n                            \"color\": \"$statusColor\"\n}\n                    ]\n                }\n            ]\n        },\n        {\n            \"type\": \"ColumnSet\",\n            \"separator\": true,\n            \"spacing\": \"Medium\",\n            \"columns\": [\n                {\n                    \"type\": \"Column\",\n                    \"width\": \"stretch\",\n                    \"items\": [\n                        {\n                            \"type\": \"TextBlock\",\n                            \"text\": \"ServiceName\",\n                            \"wrap\": true\n                        },\n                        {\n                            \"type\": \"TextBlock\",\n     \"text\": \"RequestID\",\n                            \"wrap\": true\n                        }\n                    ]\n                },\n                {\n                    \"type\": \"Column\",\n                    \"width\": \"auto\",\n                    \"items\": [\n                        {\n                            \"type\": \"TextBlock\",\n                            \"horizontalAlignment\": \"Right\",\n                            \"isSubtle\": true,\n                            \"weight\": \"Bolder\",\n                            \"wrap\": true,\n                            \"text\": \"$ServiceName        \"\n                        },\n                        {\n                            \"type\": \"TextBlock\",\n                            \"text\": \"$RequestID\",\n                            \"horizontalAlignment\": \"Right\",\n                            \"spacing\": \"Small\",\n                            \"wrap\": true\n                        }\n                    ]\n                }\n            ]\n        },\n        {\n\"type\": \"ColumnSet\",\n            \"spacing\": \"Medium\",\n            \"separator\": true,\n            \"columns\": [\n                {\n                    \"type\": \"Column\",\n                    \"width\": 1,\n                    \"items\": [\n                        {\n                            \"type\": \"TextBlock\",\n                            \"text\": \"Request Return\",\n                            \"isSubtle\": true,\n                            \"weight\": \"Bolder\",\n                            \"wrap\": true\n                        }\n                    ]\n                }\n            ]\n        },\n        {\n\"type\": \"ColumnSet\",\n            \"spacing\": \"Small\",\n            \"columns\": [\n                {\n                    \"type\": \"Column\",\n                    \"width\": 1,\n                    \"items\": [\n                        {\n                            \"type\": \"TextBlock\",\n                            \"text\": \"$au2matorReturn \\n            \",\n\"isSubtle\": true,\n                            \"wrap\": true\n                        },\n                        {\n                            \"type\": \"ActionSet\",\n                            \"actions\": [\n                                {\n                                    \"type\": \"Action.OpenUrl\",\n                                    \"title\": \"Request Details\",\n                                    \"url\": \"$URL\",\n                                    \"style\": \"destructive\"\n                                }\n                            ],\n                            \"height\": \"stretch\"\n}\n                    ]\n                }\n            ]\n        }\n    ],\n     \"msteams\": {\n      \"entities\": [\n        {\n          \"type\": \"mention\",\n          \"text\": \"\u003cat\u003e$RecipientUserDisplayName\u003c/at\u003e\",\n          \"mentioned\": {\n            \"id\": \"8:orgid:$RecipientUserID\",\n            \"name\": \"$RecipientUserDisplayName\"\n          }\n        }\n      ]\n    }\n        }"
+        }
+      ]
+    }
+"@
+
+
+    Write-au2matorLog -Type INFO -Text "Send Card"
+    $Result = Invoke-RestMethod -Method POST -Uri $URLchatmessage -Body $BodyJsonTeam -Headers $headers
+}
+
+
 #endregion Functions
 
 
@@ -465,26 +584,25 @@ Function Send-ServiceMail ($HTMLBody, $ServiceName, $Recipient, $RequestID, $Req
 #region Script
 Write-au2matorLog -Type INFO -Text "Start Script"
 
+
 if ($DoImportPSSession) {
 
     Write-au2matorLog -Type INFO -Text "Import-Pssession"
-    $PSSession = New-PSSession -ComputerName $DCServer
-    Import-PSSession -Session $PSSession -DisableNameChecking -AllowClobber
+    $PSSession = New-PSSession -ComputerName $PSRemotingServer
+    Import-PSSession -Session $PSSession -DisableNameChecking -AllowClobber 
 }
 
 #Check for Modules if installed
 Write-au2matorLog -Type INFO -Text "Try to install all PowerShell Modules"
 foreach ($Module in $Modules) {
     if (Get-Module -ListAvailable -Name $Module) {
-        Write-au2matorLog -Type INFO -Text "Module is already installed:  $Module"
+        Write-au2matorLog -Type INFO -Text "Module is already installed:  $Module"        
     }
     else {
         Write-au2matorLog -Type INFO -Text "Module is not installed, try simple method:  $Module"
         try {
-
             Install-Module $Module -Force -Confirm:$false
             Write-au2matorLog -Type INFO -Text "Module was installed the simple way:  $Module"
-            Write-au2matorLog -Type INFO -Text "Import Module:  $Module"
         }
         catch {
             Write-au2matorLog -Type INFO -Text "Module is not installed, try the advanced way:  $Module"
@@ -493,7 +611,6 @@ foreach ($Module in $Modules) {
                 Install-PackageProvider -Name NuGet  -MinimumVersion 2.8.5.201 -Force
                 Install-Module $Module -Force -Confirm:$false
                 Write-au2matorLog -Type INFO -Text "Module was installed the advanced way:  $Module"
-                Write-au2matorLog -Type INFO -Text "Import Module:  $Module"
             }
             catch {
                 Write-au2matorLog -Type ERROR -Text "could not install module:  $Module"
@@ -510,18 +627,25 @@ foreach ($Module in $Modules) {
 
 #region CustomCode
 Write-au2matorLog -Type INFO -Text "Start Custom Code"
+$error.Clear()
 
 
 Write-au2matorLog -Type INFO -Text "Try to start Maintenance Mode"
 
-try {
-    $scomclasseinstance = Get-SCOMClassInstance -DisplayName $c_ScomDA | Where-Object -Property FullName -Value "Service_*" -Like
-    $EndTime = (get-date).AddMinutes(($c_DurartionInMinutes));
-    Start-SCOMMaintenanceMode -Instance $scomclasseinstance -EndTime $EndTime -Reason $c_Reason -Comment $c_Comment;
+try {    
+    $EndTime = (get-date).AddMinutes(($c_DurartionInMinutes))
     
+    Invoke-Command -ComputerName $OpsmgrServer -ScriptBlock {
+        param($c_ScomDA, $EndTime, $c_Reason, $c_Comment)
+        Import-Module OperationsManager
+        Get-SCOMClassInstance -DisplayName $c_ScomDA | Where-Object -Property FullName -Value "Service_*" -Like |  Start-SCOMMaintenanceMode -EndTime $EndTime -Reason $c_Reason -Comment $c_Comment 
+    } -ArgumentList  $c_ScomDA, $EndTime, $c_Reason, $c_Comment 
+
+
     Write-au2matorLog -Type INFO -Text "Maintenance Mode started"
 
     $au2matorReturn = "Maintenance Mode Set for $c_ScomDA"
+    $TeamsReturn= "Maintenance Mode Set for $c_ScomDA" #No Special Characters allowed
     $AdditionalHTML = "Maintenance Mode Set for $c_ScomDA
         "
     $Status = "COMPLETED"
@@ -531,6 +655,7 @@ catch {
     Write-au2matorLog -Type ERROR -Text $Error
 
     $au2matorReturn = "Failed to set Maintenance Mode for $c_ScomDA"
+    $TeamsReturn= "Failed to set Maintenance Mode for $c_ScomDA" #No Special Characters allowed
     $AdditionalHTML = "Failed to set Maintenance Mode for $c_ScomDA
         "
     $Status = "ERROR"
@@ -540,29 +665,41 @@ catch {
 #endregion Script
 
 #region Return
-## return to au2mator Services
-
 
 Write-au2matorLog -Type INFO -Text "Service finished"
 
-if ($SendMailToInitiatedByUser) {
-    Write-au2matorLog -Type INFO -Text "Send Mail to Initiated By User"
-
+if ($SendMailToInitiatedByUser -or $SendMailToTargetUser -or $SendTeamsCardToInitiatedByUser -or $SendTeamsCardToTargetUser) {
+    Write-au2matorLog -Type INFO -Text "We need to Send Mail or Teams Chat, so get all Infos"
     $UserInput = Get-UserInput -RequestID $RequestId
     $HTML = Get-MailContent -RequestID $RequestId -RequestTitle $Service -EndDate $UserInput.ApprovedTime -TargetUserId $UserInput.TargetUserId -InitiatedBy $UserInput.InitiatedBy -Status $Status -PortalURL $PortalURL  -AdditionalHTML $AdditionalHTML -InputHTML $UserInput.html
+}
+
+if ($SendMailToInitiatedByUser) {
+    Write-au2matorLog -Type INFO -Text "Send Mail to Initiated By User"
     Send-ServiceMail -HTMLBody $HTML -RequestID $RequestId -Recipient $($UserInput.MailInitiatedBy) -RequestStatus $Status -ServiceName $Service
 }
 
 if ($SendMailToTargetUser) {
     Write-au2matorLog -Type INFO -Text "Send Mail to Target User"
-
-    $UserInput = Get-UserInput -RequestID $RequestId
-    $HTML = Get-MailContent -RequestID $RequestId -RequestTitle $Service -EndDate $UserInput.ApprovedTime -TargetUserId $UserInput.TargetUserId -InitiatedBy $UserInput.InitiatedBy -Status $Status -PortalURL $PortalURL -AdditionalHTML $AdditionalHTML -InputHTML $UserInput.html
     Send-ServiceMail -HTMLBody $HTML -RequestID $RequestId -Recipient $($UserInput.MailTarget) -RequestStatus $Status -ServiceName $Service
 }
 
+
+if ($SendTeamsCardToInitiatedByUser) {
+    Write-au2matorLog -Type INFO -Text "Send Teams Card to InitiatedBy"
+    Send-TeamsCard  -RequestID $RequestId -Recipient $($UserInput.MailInitiatedBy) -RequestStatus $Status -ServiceName $Service -au2matorReturn $TeamsReturn
+}
+
+if ($SendTeamsCardToTargetUser) {
+    Write-au2matorLog -Type INFO -Text "Send Teams Card to Target User"
+    Send-TeamsCard  -RequestID $RequestId -Recipient $($UserInput.MailTarget) -RequestStatus $Status -ServiceName $Service -au2matorReturn $TeamsReturn
+}
+
+
 return $au2matorReturn
 #endregion Return
+
+
 
 
 
