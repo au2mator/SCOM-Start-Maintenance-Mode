@@ -108,7 +108,7 @@ if ($SMTPCredential_method -eq "Manual") {
 }
 
 
-#TeamsCredentials to send Teams Card #https://au2mator.com/documentation/powershell-credentials/?utm_source=github&utm_medium=social&utm_campaign=PS_Template&utm_content=PS1
+#TeamsCredentials to send Teams Card #https://au2mator.com/documentation/powershell-credentials/?utm_source=github&utm_medium=social&utm_campaign=SCOM_StartMM&utm_content=PS1
 $GraphAPICred_File = "TeamsCreds.xml"
 $GraphAPICred = Import-CliXml -Path (Get-ChildItem -Path $CredentialStorePath -Filter $GraphAPICred_File).FullName
 $TEAMS_clientId = $GraphAPICred.clientId
