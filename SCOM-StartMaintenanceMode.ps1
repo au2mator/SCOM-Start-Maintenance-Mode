@@ -61,7 +61,7 @@ $DoImportPSSession = $false
 [string]$LogPath = "C:\_SCOworkingDir\TFS\PS-Services\SCOM - Start Maintenance Mode"
 [string]$LogfileName = "Start-Maintenance Mode"
 
-[string]$CredentialStorePath = "C:\_SCOworkingDir\TFS\PS-Services\CredentialStore" #see for details: https://au2mator.com/documentation/powershell-credentials/?utm_source=github&utm_medium=social&utm_campaign=SCOM_StartMM&utm_content=PS1
+[string]$CredentialStorePath = "C:\_SCOworkingDir\TFS\PS-Services\CredentialStore" #see for details: https://click.au2mator.com/PSCreds/?utm_source=github&utm_medium=social&utm_campaign=SCOM_StartMM&utm_content=PS1
 
 $Modules = @("ActiveDirectory") #$Modules = @("ActiveDirectory", "SharePointPnPPowerShellOnline")
 
@@ -92,7 +92,7 @@ $SMTPSender = "SelfService@au2mator.com"
 $SMTPPort = "587"
 
 # Stored Credentials
-# See: https://au2mator.com/documentation/powershell-credentials/?utm_source=github&utm_medium=social&utm_campaign=SCOM_StartMM&utm_content=PS1
+# See: https://click.au2mator.com/PSCreds/?utm_source=github&utm_medium=social&utm_campaign=SCOM_StartMM&utm_content=PS1
 $SMTPCredential_method = "Stored" #Stored, Manual
 $SMTPcredential_File = "SMTPCreds.xml"
 $SMTPUser = ""
@@ -108,7 +108,7 @@ if ($SMTPCredential_method -eq "Manual") {
 }
 
 
-#TeamsCredentials to send Teams Card #https://au2mator.com/documentation/powershell-credentials/?utm_source=github&utm_medium=social&utm_campaign=SCOM_StartMM&utm_content=PS1
+#TeamsCredentials to send Teams Card #https://click.au2mator.com/PSCreds/?utm_source=github&utm_medium=social&utm_campaign=SCOM_StartMM&utm_content=PS1
 $GraphAPICred_File = "TeamsCreds.xml"
 $GraphAPICred = Import-CliXml -Path (Get-ChildItem -Path $CredentialStorePath -Filter $GraphAPICred_File).FullName
 $TEAMS_clientId = $GraphAPICred.clientId
